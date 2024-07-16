@@ -1,0 +1,220 @@
+import os, datetime, beaupy, mysql.connector, json
+
+MainMenu = ["1 - Gestão de Cursos", "2 - Gestão de Formandos","3 - Pesquisar", "4 - Sair"]
+MenuCursos = ["a - Ver Cursos", "b - Inserir Cursos", "c - Voltar ao Menu"]
+MenuFormandos = ["a - Ver formando", "b - Inserir/Matricular Formando", "c - Voltar ao Menu"]
+MenuPesquisas = ["a - Pesquisar Cursos","b - Pesquisar Formando", "c - Voltar ao Menu"]
+
+#funções genéricas
+
+def loadData(table : str,database : str): #faz o load da tabela
+    try:
+        conn = mysql.connector.connect(user='root', host='localhost', database=database)
+    except:
+        print("\n Error na ligação\n")
+    else:
+        cursor = conn.cursor()
+        query = f"SELECT * FROM {table}"
+        cursor.execute(query)
+        myResult = cursor.fetchall()
+        conn.close()
+        return myResult
+
+def insertData(table : str,database : str,campos : tuple,valores : tuple, nCampos : str): #Insere dados numa tabela
+    try:
+        conn = mysql.connector.connect(user='root', host='localhost', database=database, port=3306, autocommit=True)
+    except:
+        print("\nErro: ligação à base de dados falhou!\n")
+    else:
+        cursor = conn.cursor()
+        query = f"INSERT INTO {table} ({campos}) VALUES ({nCampos})"
+        cursor.execute(query, valores)
+        print(f"Foram inseridos {cursor.rowcount} registos!")
+        conn.close()   
+
+def validarNIF(NIF : str,nome : str): #valida se o NIF existe na tabela formandos
+    return True if selectQuerry("cesae", f"SELECT * FROM formando WHERE nome = '{nome}' AND nif = '{NIF}' ") else False
+
+def validarData(dataInicio : str ,dataFim : str): #valida se a data é um valor válido e se a data de início é inferior à data de fim
+    return True if (converterData(dataInicio) < converterData(dataFim)) and (converterData(dataInicio) != datetime.datetime.strptime("1900-01-01", '%Y-%m-%d').date()) else False 
+
+def converterData(data : str): #converte a data para estilo datetime, se a data não for válida ela retorna uma data infinitamente pequena 
+    try:
+        return datetime.datetime.strptime(data, '%Y-%m-%d').date()
+    except:
+        return datetime.datetime.strptime("1900-01-01", '%Y-%m-%d').date()   
+
+def formatarLoadDataOutPut(listaLoadData : list, *args : str): #transforma a lista de cursos no menu 1 e devolve um print elaborado dos cursos
+    print(50*"*")
+    for resultado in listaLoadData:
+        countResultado = 1
+        for arg in args:
+            print(f"{arg} - {resultado[countResultado]} ")
+            countResultado += 1
+        print(50*"*")
+
+def formatarListaJSON(listaTable : list, chave : str, *args : str): # formata a lista das tabelas para um dicionário para ser escrito no JSON
+    listaoutput = []
+    for resultado in listaTable:
+        countResultado = 0
+        dictOutPut = {}
+        for arg in args:
+            dictOutPut.update({arg : resultado[countResultado]})
+            countResultado += 1
+        listaoutput.append(dictOutPut)    
+    return {chave : listaoutput}
+
+def selectQuerry(database : str, query : str): #função genérica para um select numa dada tabela com uma dada query
+    try:
+        conn = mysql.connector.connect(user='root', host='localhost', database=database)
+    except:
+        print("\n Error na ligação\n")
+    else:
+        cursor = conn.cursor()
+        cursor.execute(query)
+        myResult = cursor.fetchall()
+        conn.close()
+        return myResult
+
+def loadCursosDisponiveis(resultado : list): #devolve uma lista dos cursos disponiveis na função pesquisa
+    listas = []
+    for curso in resultado:
+        listas.append(f"{curso[0]} - {curso[1]}")
+    return listas
+
+def getListaFormandosCursos(query : str, table : str): #função genérica para devolver a lista de formandos quando pedido o curso ou uma lista de cursos quando pedido o formando
+    listaIdFormandos = []
+    dictNomeFormandos = {}
+    listaResultados = selectQuerry("cesae",query)
+    for resultado in listaResultados:
+        listaIdFormandos.append(resultado[0])
+    for id in listaIdFormandos:
+        dictNomeFormandos[id] = selectQuerry("cesae",f"SELECT nome FROM {table} WHERE id = '{id}'")[0][0]
+    return sorted(dictNomeFormandos.items(), key=lambda x: x[0])    
+    
+def printListagem(lista : list): #devolve a lista final de cursos/formandos na função pesquisa
+    for key in lista:
+        print(f"{key[0]} - {key[1]}")
+
+def loadListasToJson(): #insere os dados no json
+    #tabela final cursos
+    listaFinalCursos = formatarListaJSON(loadData("curso","cesae"), "Cursos", "Curso_id", "Nome do curso", "Data de inicio","Data de fim")
+    writeJSON(listaFinalCursos,"cursos.json")
+
+    #tabela final formandos
+    listaFinalFormandos = formatarListaJSON(loadData("formando","cesae"),"Formandos", "Formando_id", "Nome do Formando", "NIF")
+    writeJSON(listaFinalFormandos,"formandos.json")
+
+    #tabela final matriculas
+    listaFinalMatriculas = formatarListaJSON(loadData("matricula","cesae"),"Matriculas", "Matricula_id", "formando_id", "curso_id")
+    writeJSON(listaFinalMatriculas,"matriculas.json")
+
+def writeJSON(listaJSON : list,nomeficheiro : str): #escreve no JSON
+    try:
+        with open(nomeficheiro, 'w', encoding="utf8") as f:
+             json.dump(listaJSON,f,indent = 4, default=str, ensure_ascii=False)
+    except:
+         return []     
+
+#funções menu
+
+def cursoMenu(): #menu1
+    while True:
+        op = beaupy.select(MenuCursos, cursor="=>", cursor_style="red", return_index=True)+1
+        match op:
+            case 1:
+                print(loadData("curso","cesae"))
+                formatarLoadDataOutPut(loadData("curso","cesae"), "Nome do curso", "Data de início","Data de fim")
+            case 2:
+                dataIni = input("Introduza a data de inicio (formato: AAAA-MM-DD): ")
+                dataFim = input("Introduza a data de fim (formato: AAAA-MM-DD): ")
+                if validarData(dataIni,dataFim):
+                   insertData("curso","cesae","nome, data_inicio, data_fim",
+                             (input("Introduza o curso: "), dataIni , dataFim), 
+                             ("%s,%s,%s")) 
+                else:
+                    print("Datas Inválidas")   
+            case 3: 
+                break       
+
+
+
+def inserirMatricularFormando(): #menu2b
+    print("Inserir Formando")
+    nomeFormando = input("Introduza o nome do formando que deseja inserir: ").title()
+    dateAtual = datetime.datetime.now().date()
+    resultado= selectQuerry("cesae", f"SELECT id, nome FROM curso WHERE data_inicio > '{dateAtual}' ")
+    cursosDisponiveis = loadCursosDisponiveis(resultado)
+    cursoDisponivelBeaupy = beaupy.select(cursosDisponiveis, cursor="=>", cursor_style="green", return_index=True)
+    cursoIdAInserir = cursosDisponiveis[cursoDisponivelBeaupy].split(" ")[0]
+    NIF = input("Introduza o seu NIF: ")
+    if not validarNIF(NIF,nomeFormando):
+       print("\nNIF do formando não consta na nossa base de dados\n")
+       insertData("formando","cesae","nome,nif",(nomeFormando,NIF),("%s,%s"))
+    else:
+       print("\nNIF do formando encontrado!\n")
+    idFormando = selectQuerry("cesae", f"SELECT id, nome FROM formando WHERE nif = {NIF}")[0][0]
+    if not selectQuerry("cesae",f"SELECT * FROM matricula WHERE formando_id = '{idFormando}' AND curso_id = '{cursoIdAInserir}'"):
+        insertData("matricula","cesae","formando_id,curso_id",(idFormando,cursoIdAInserir),("%s,%s"))
+    else:
+        print("\n Este Formando já se encontra matriculado. Por favor insira-o noutro curso ou saia do ecrã.\n")    
+
+
+
+def formandoMenu(): #menu 2
+    while True:
+        op = beaupy.select(MenuFormandos, cursor="=>", cursor_style="red", return_index=True)+1
+        match op:
+            case 1:
+                formatarLoadDataOutPut(loadData("formando","cesae"), "Nome do formando", "NIF")
+            case 2:
+                inserirMatricularFormando()
+            case 3: 
+                break   
+
+def pesquisa(): #menu3
+    while True:
+        op = beaupy.select(MenuPesquisas, cursor="=>", cursor_style="red", return_index=True)+1
+        match op:
+            case 1:
+                try:
+                   cursoAPesquisar = input("Introduza o Curso que quer pesquisar: ").title() 
+                   infoCurso = selectQuerry("cesae",f"SELECT id, data_inicio, data_fim FROM curso WHERE nome = '{cursoAPesquisar}'")
+                   idCurso, dataini, datafim = infoCurso[0]
+                except:
+                    print("Esse Curso não existe na base de dados. ")
+                else:    
+                    formandos = getListaFormandosCursos(f"SELECT formando_id FROM matricula WHERE curso_id = '{idCurso}'", "formando")
+                    print(f"{cursoAPesquisar} - {dataini} / {datafim}")
+                    printListagem (formandos)
+            case 2:
+                try:
+                   formandoAPesquisar = input("\nIntroduza o nif do formando que quer pesquisar: ")
+                   infoFormando= selectQuerry("cesae",f"SELECT id FROM formando WHERE nif = '{formandoAPesquisar}'")[0][0] 
+                except:
+                    print("Esse formando não existe na base de dados.")   
+                else:    
+                    listagemDeCursos = getListaFormandosCursos(f"SELECT curso_id FROM matricula WHERE formando_id = '{infoFormando}'", "curso")
+                    print(f"Listagem de Cursos correspondentes ao formando com o NIF {formandoAPesquisar} " )
+                    printListagem (listagemDeCursos)
+            case 3:
+                break          
+
+def main():
+    while True:
+        op = beaupy.select(MainMenu, cursor="=>", cursor_style="blue", return_index=True)+1
+        match op:
+            case 1:
+                cursoMenu()
+            case 2:
+                formandoMenu()   
+            case 3:
+                pesquisa()
+            case 4:
+                os.system("cls")
+                loadListasToJson()
+                print ("\n Obrigado pela sua Contribuição! \n")
+                break           
+
+
+main()
